@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Prompt Cache API + Atlas Dashboard
-Zeug Lab — Lilith build
+Prompt Cache API — Zeug Lab
+Deploys to Render (Flask + SQLite)
 """
 
 import os
@@ -10,17 +10,63 @@ import hashlib
 import sqlite3
 import time
 from datetime import datetime
-from functools import lru_cache
 
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
-CORS(app)
+# Allow all origins for demo — restrict in production
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "cache.db")
 KIE_KEY = os.environ.get("KIE_AI_API_KEY", "")
+
+# ── Seed data ───────────────────────────────────────────────────
+SEED_PROMPTS = [
+    {
+        "prompt": "What are the 15 rules to reduce AI token consumption?",
+        "response": "Nate B. Jones identifies 3 levels: (1) Manual habits—compress prompts, remove fluff, use structured output; (2) Middleware—prompt caching, semantic deduplication, response compression; (3) Architecture—model selection, streaming, batching. Key rules: clean your desk (remove context cruft), cache everything repeated, use cheaper models for pre-processing, stream responses, batch where possible.",
+        "tokens_in": 420,
+        "tokens_out": 1130,
+        "hits": 9
+    },
+    {
+        "prompt": "How does prompt caching reduce token costs?",
+        "response": "Prompt caching stores repeated prompt prefixes and full prompts. On exact match: zero tokens sent to model. On semantic match: retrieve cached response without API call. Works best for SOPs, repeated queries, and agent loops. Can save 60-90% of token costs at scale.",
+        "tokens_in": 280,
+        "tokens_out": 720,
+        "hits": 6
+    },
+    {
+        "prompt": "What is the Ringer multi-agent framework?",
+        "response": "Ringer is a local intermediary that sits between your application and AI models. It handles routing, caching, fallback, and load balancing across multiple providers. Designed for resilience: if one provider fails, Ringer routes to another without application changes.",
+        "tokens_in": 310,
+        "tokens_out": 870,
+        "hits": 2
+    },
+    {
+        "prompt": "Explain the 'clean your desk' metaphor for token optimization",
+        "response": "The desk metaphor: Level 1 optimization is like cleaning your physical desk—remove everything not needed for the current task. In prompt terms: strip system messages, remove conversation history cruft, use concise instructions. A clean prompt = fewer tokens = lower cost + faster response.",
+        "tokens_in": 250,
+        "tokens_out": 720,
+        "hits": 2
+    },
+    {
+        "prompt": "How can SOPs be combined with prompt caching for asymmetric performance?",
+        "response": "Insert Zeug SOPs as cached system prompts. Each agent call references the cached SOP by hash instead of sending full text. With semantic caching, even paraphrased requests hit the SOP cache. Result: complex 2000-token SOPs compress to a 64-byte hash reference. Asymmetric improvement: tiny prompt → huge cached context.",
+        "tokens_in": 380,
+        "tokens_out": 1020,
+        "hits": 1
+    },
+    {
+        "prompt": "What is ClawPanel's Prompt Caching API?",
+        "response": "A workspace-level proxy that intercepts prompts before they reach any model provider. Features: exact-match cache, semantic similarity search via embeddings, per-workspace scoping, RLS isolation, hit-rate analytics. Drops into existing apps with a single URL change.",
+        "tokens_in": 340,
+        "tokens_out": 860,
+        "hits": 1
+    }
+]
 
 # ── DB ──────────────────────────────────────────────────────────
 def init_db():
@@ -55,10 +101,36 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()
+def seed_db():
+    """Populate demo data if empty."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM cache_entries")
+    if c.fetchone()[0] > 0:
+        conn.close()
+        return
+    
+    for item in SEED_PROMPTS:
+        h = hashlib.sha256(item["prompt"].encode()).hexdigest()[:32]
+        c.execute('''INSERT INTO cache_entries 
+            (prompt_hash, prompt_text, response_text, model, provider, tokens_in, tokens_out, created_at, hit_count)
+            VALUES (?,?,?,?,?,?,?,?,?)''',
+            (h, item["prompt"], item["response"], "claude-sonnet-4", "anthropic",
+             item["tokens_in"], item["tokens_out"], time.time(), item["hits"]))
+        # Record the initial hits as calls
+        for _ in range(item["hits"]):
+            c.execute('''INSERT INTO calls 
+                (prompt_hash, was_hit, tokens_in, tokens_out, latency_ms, created_at)
+                VALUES (?,1,?,?,0,?)''',
+                (h, item["tokens_in"], item["tokens_out"], time.time()))
+    conn.commit()
+    conn.close()
 
 def db_conn():
     return sqlite3.connect(DB_PATH)
+
+init_db()
+seed_db()
 
 # ── Hash ─────────────────────────────────────────────────────────
 def hash_prompt(text: str) -> str:
@@ -91,10 +163,33 @@ def cosine_similarity(a: list, b: list) -> float:
         return 0.0
     return dot / (norm_a * norm_b)
 
-# ── Core API ─────────────────────────────────────────────────────
+# ── API Routes ───────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template_string(DASHBOARD_HTML)
+
+@app.route("/api/health")
+def health():
+    return jsonify({"status": "ok", "version": "1.0.0", "cached_entries": _count_entries()})
+
+@app.route("/api/cache/list")
+def cache_list():
+    """Return all cached entries for the atlas."""
+    conn = db_conn()
+    c = conn.cursor()
+    c.execute('''SELECT prompt_text, response_text, hit_count, tokens_in, tokens_out, created_at 
+                 FROM cache_entries ORDER BY hit_count DESC''')
+    rows = []
+    for r in c.fetchall():
+        rows.append({
+            "prompt": r[0],
+            "response_preview": r[1][:200] + "..." if len(r[1]) > 200 else r[1],
+            "hits": r[2],
+            "tokens": r[3] + r[4],
+            "created_at": datetime.fromtimestamp(r[5]).isoformat()
+        })
+    conn.close()
+    return jsonify(rows)
 
 @app.route("/api/cache/check", methods=["POST"])
 def cache_check():
@@ -239,22 +334,28 @@ def calls():
     conn.close()
     return jsonify(rows)
 
-# ── Dashboard HTML ───────────────────────────────────────────────
-DASHBOARD_HTML = """
-<!DOCTYPE html>
+def _count_entries():
+    conn = db_conn()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM cache_entries")
+    n = c.fetchone()[0]
+    conn.close()
+    return n
+
+# ── Built-in Admin Dashboard ─────────────────────────────────────
+DASHBOARD_HTML = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Zeug Prompt Cache — Atlas</title>
+<title>Zeug Prompt Cache — Admin</title>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 :root{--ink:#0b0b0d;--bone:#f1f0ec;--fog:#55555c;--accent:#ff6b35;--accent2:#4ecdc4;}
 *{box-sizing:border-box;margin:0;padding:0;font-family:'IBM Plex Mono',monospace;}
 body{background:var(--ink);color:var(--bone);min-height:100vh;}
 header{padding:2rem;border-bottom:1px solid #222;}
-h1{font-size:1.5rem;letter-spacing:-0.02em;}
-h1 span{color:var(--accent);}
+h1{font-size:1.5rem;letter-spacing:-0.02em;} h1 span{color:var(--accent);}
 .sub{color:var(--fog);font-size:0.8rem;margin-top:0.5rem;}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;padding:2rem;}
 .card{background:#151518;border:1px solid #222;border-radius:8px;padding:1.5rem;}
@@ -270,24 +371,19 @@ tr:hover{background:#1a1a1e;}
 #test-area{background:#151518;border:1px solid #222;border-radius:8px;padding:1.5rem;margin:0 2rem 2rem;}
 textarea{width:100%;background:#0d0d10;border:1px solid #333;color:var(--bone);padding:0.75rem;font-family:inherit;font-size:0.8rem;border-radius:4px;resize:vertical;}
 button{background:var(--accent);color:var(--ink);border:none;padding:0.6rem 1.2rem;font-family:inherit;font-size:0.75rem;font-weight:700;cursor:pointer;border-radius:4px;margin-top:0.5rem;}
-button:hover{opacity:0.9;}
-#result{margin-top:1rem;padding:1rem;background:#0d0d10;border-radius:4px;font-size:0.75rem;min-height:3rem;}
+button:hover{opacity:0.9;} #result{margin-top:1rem;padding:1rem;background:#0d0d10;border-radius:4px;font-size:0.75rem;min-height:3rem;}
 .hit{color:var(--accent2);}.miss{color:var(--accent);}
+@media(max-width:768px){.grid{grid-template-columns:1fr;}#graph{margin:0 1rem 1rem;height:300px;}#test-area{margin:0 1rem 1rem;}.section{padding:0 1rem 1rem;}header{padding:1.5rem 1rem;}}
 </style>
 </head>
 <body>
-<header>
-<h1>Zeug <span>Prompt Cache</span> Atlas</h1>
-<div class="sub">Real-time token savings · Semantic caching · Knowledge graph</div>
-</header>
-
+<header><h1>Zeug <span>Prompt Cache</span> Atlas — Admin</h1><div class="sub">Real-time token savings · Semantic caching · Knowledge graph</div></header>
 <div class="grid" id="stats">
 <div class="card"><h3>Cache Entries</h3><div class="big" id="s-cached">0</div></div>
 <div class="card"><h3>Hit Rate</h3><div class="big" id="s-rate">0%</div></div>
 <div class="card"><h3>Tokens Saved</h3><div class="big" id="s-saved">0</div><div class="unit" id="s-usd">$0.00</div></div>
 <div class="card"><h3>Total Calls</h3><div class="big" id="s-calls">0</div></div>
 </div>
-
 <div id="test-area">
 <h3 style="font-size:0.75rem;text-transform:uppercase;color:var(--fog);margin-bottom:0.75rem;">Test Cache</h3>
 <textarea id="prompt" rows="3" placeholder="Enter a prompt to test caching..."></textarea><br>
@@ -295,77 +391,57 @@ button:hover{opacity:0.9;}
 <button onclick="storeCache()" style="background:var(--fog);color:var(--bone);margin-left:0.5rem;">Store Response</button>
 <div id="result"></div>
 </div>
-
 <div id="graph"></div>
-
 <div class="section">
 <h3 style="font-size:0.75rem;text-transform:uppercase;color:var(--fog);margin-bottom:0.75rem;">Recent Calls</h3>
 <table id="calls-table"><thead><tr><th>Time</th><th>Type</th><th>Hash</th><th>Tokens</th></tr></thead><tbody></tbody></table>
 </div>
-
 <script>
 async function loadStats(){
-  const r=await fetch('/api/stats');
-  const d=await r.json();
+  const r=await fetch('/api/stats'); const d=await r.json();
   document.getElementById('s-cached').textContent=d.total_cached;
   document.getElementById('s-rate').textContent=d.hit_rate_percent+'%';
   document.getElementById('s-saved').textContent=d.tokens_saved.toLocaleString();
   document.getElementById('s-usd').textContent='$'+d.estimated_cost_saved_usd;
   document.getElementById('s-calls').textContent=d.total_calls;
-  
-  // Build graph
   const nodes=d.top_cached.map((t,i)=>({id:i,name:t.prompt.slice(0,30),tokens:t.tokens,hits:t.hits}));
   const links=[];
   for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++)links.push({source:i,target:j,value:Math.max(1,5-Math.abs(nodes[i].hits-nodes[j].hits))});
   drawGraph(nodes,links);
 }
-
 function drawGraph(nodes,links){
   const w=document.getElementById('graph').clientWidth,h=400;
   d3.select('#graph').selectAll('*').remove();
   const svg=d3.select('#graph').append('svg').attr('width',w).attr('height',h);
   const sim=d3.forceSimulation(nodes).force('link',d3.forceLink(links).id(d=>d.id).distance(80)).force('charge',d3.forceManyBody().strength(-200)).force('center',d3.forceCenter(w/2,h/2));
-  
   svg.append('g').selectAll('line').data(links).join('line').attr('stroke','#333').attr('stroke-width',1);
   const node=svg.append('g').selectAll('circle').data(nodes).join('circle').attr('r',d=>8+d.hits*2).attr('fill','#ff6b35').attr('opacity',0.8).call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y;}).on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
   svg.append('g').selectAll('text').data(nodes).join('text').text(d=>d.name).attr('x',d=>d.x).attr('y',d=>d.y-12).attr('fill','#888').attr('font-size','10px').attr('text-anchor','middle');
-  
   sim.on('tick',()=>{svg.selectAll('line').attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);node.attr('cx',d=>d.x).attr('cy',d=>d.y);svg.selectAll('text').attr('x',d=>d.x).attr('y',d=>d.y-12);});
 }
-
 async function testCache(){
-  const p=document.getElementById('prompt').value;
-  if(!p)return;
+  const p=document.getElementById('prompt').value; if(!p)return;
   const r=await fetch('/api/cache/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:p})});
-  const d=await r.json();
-  const el=document.getElementById('result');
-  if(d.cached)el.innerHTML='<span class="hit">CACHE HIT ✓</span> ('+d.match_type+') Saved '+d.tokens_saved+' tokens. Hits: '+d.hit_count;
+  const d=await r.json(); const el=document.getElementById('result');
+  if(d.cached)el.innerHTML='<span class="hit">CACHE HIT \u2713</span> ('+d.match_type+') Saved '+d.tokens_saved+' tokens. Hits: '+d.hit_count;
   else el.innerHTML='<span class="miss">CACHE MISS</span> Hash: '+d.prompt_hash;
   loadStats();
 }
-
 async function storeCache(){
-  const p=document.getElementById('prompt').value;
-  if(!p)return;
+  const p=document.getElementById('prompt').value; if(!p)return;
   const r=await fetch('/api/cache/store',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:p,response:'Sample cached response for: '+p.slice(0,50),tokens_in:p.length*2,tokens_out:150})});
-  const d=await r.json();
-  document.getElementById('result').innerHTML='<span class="hit">STORED ✓</span> Hash: '+d.prompt_hash;
+  const d=await r.json(); document.getElementById('result').innerHTML='<span class="hit">STORED \u2713</span> Hash: '+d.prompt_hash;
   loadStats();
 }
-
 async function loadCalls(){
-  const r=await fetch('/api/calls');
-  const d=await r.json();
+  const r=await fetch('/api/calls'); const d=await r.json();
   const tbody=document.querySelector('#calls-table tbody');
-  tbody.innerHTML=d.map(c=>`<tr><td>${c.time}</td><td class="${c.hit?'hit':'miss'}">${c.hit?'HIT':'MISS'}</td><td>${c.hash}</td><td>${c.tokens}</td></tr>`).join('');
+  tbody.innerHTML=d.map(c=>'<tr><td>'+c.time+'</td><td class="'+(c.hit?'hit':'miss')+'">'+(c.hit?'HIT':'MISS')+'</td><td>'+c.hash+'</td><td>'+c.tokens+'</td></tr>').join('');
 }
-
-loadStats();loadCalls();
-setInterval(()=>{loadStats();loadCalls();},5000);
+loadStats();loadCalls(); setInterval(()=>{loadStats();loadCalls();},5000);
 </script>
 </body>
-</html>
-"""
+</html>"""
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8787, debug=False)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8787)), debug=False)

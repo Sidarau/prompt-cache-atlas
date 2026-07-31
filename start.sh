@@ -1,4 +1,2 @@
 #!/bin/bash
-cd /root/.openclaw/workspace/prompt-cache-api
-source venv/bin/activate
-python app.py
+gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 60 app:app

@@ -2,14 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0d">
 <title>Zeug Prompt Cache Atlas — Live Demo</title>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 :root{--ink:#0b0b0d;--bone:#f1f0ec;--fog:#55555c;--accent:#ff6b35;--accent2:#4ecdc4;--glass:rgba(255,255,255,0.03);}
-*{box-sizing:border-box;margin:0;padding:0;font-family:'IBM Plex Mono',monospace;}
+*{box-sizing:border-box;margin:0;padding:0;font-family:'IBM Plex Mono',monospace;-webkit-tap-highlight-color:transparent;}
 body{background:var(--ink);color:var(--bone);min-height:100vh;line-height:1.6;}
 header{padding:3rem 2rem 2rem;border-bottom:1px solid #1a1a1e;position:relative;overflow:hidden;}
 header::before{content:'';position:absolute;top:-50%;left:-20%;width:60%;height:200%;background:radial-gradient(ellipse,rgba(255,107,53,0.08) 0%,transparent 70%);pointer-events:none;}
@@ -37,14 +38,14 @@ h1 span{color:var(--accent);}
 
 .prompt-card{background:var(--glass);border:1px solid #1a1a1e;border-radius:8px;padding:1rem;margin-bottom:0.75rem;display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;transition:all 0.2s;}
 .prompt-card:hover{border-color:#333;background:rgba(255,255,255,0.05);}
-.prompt-text{font-size:0.8rem;color:var(--bone);flex:1;}
-.prompt-meta{text-align:right;white-space:nowrap;}
+.prompt-text{font-size:0.8rem;color:var(--bone);flex:1;word-break:break-word;}
+.prompt-meta{text-align:right;white-space:nowrap;flex-shrink:0;}
 .hits-badge{background:rgba(78,205,196,0.15);color:var(--accent2);padding:0.2rem 0.5rem;border-radius:4px;font-size:0.65rem;font-weight:700;}
 .tokens-badge{color:var(--fog);font-size:0.65rem;margin-top:0.25rem;}
 
 .api-section{background:linear-gradient(180deg,var(--glass) 0%,transparent 100%);border-top:1px solid #1a1a1e;padding:2rem;}
 .api-section h3{font-size:0.75rem;text-transform:uppercase;color:var(--fog);margin-bottom:1rem;letter-spacing:0.08em;}
-.code-block{background:#0d0d10;border:1px solid #222;border-radius:8px;padding:1rem;font-size:0.75rem;overflow-x:auto;color:#888;}
+.code-block{background:#0d0d10;border:1px solid #222;border-radius:8px;padding:1rem;font-size:0.75rem;overflow-x:auto;color:#888;-webkit-overflow-scrolling:touch;}
 .code-block .kw{color:var(--accent);}.code-block .str{color:var(--accent2);}.code-block .cm{color:var(--fog);}
 
 footer{padding:2rem;text-align:center;color:var(--fog);font-size:0.7rem;border-top:1px solid #1a1a1e;}
@@ -54,7 +55,20 @@ footer a{color:var(--accent);text-decoration:none;}
 .live-indicator{display:inline-flex;align-items:center;gap:0.4rem;font-size:0.65rem;color:var(--accent2);}
 .live-indicator::before{content:'';width:6px;height:6px;background:var(--accent2);border-radius:50%;animation:pulse 2s infinite;}
 
-@media(max-width:768px){h1{font-size:1.5rem;}.grid{grid-template-columns:1fr;}#graph{height:350px;}}
+.loading{opacity:0.5;animation:fade 1s infinite alternate;}
+@keyframes fade{from{opacity:0.3;}to{opacity:0.7;}}
+
+.error-banner{background:rgba(255,107,53,0.1);border:1px solid rgba(255,107,53,0.3);color:var(--accent);padding:1rem;border-radius:8px;margin:1rem 2rem;font-size:0.75rem;max-width:1400px;display:none;}
+
+@media(max-width:768px){
+  h1{font-size:1.5rem;}
+  .grid{grid-template-columns:1fr;padding:1rem;}
+  #graph{height:350px;}
+  #graph-wrap,.section,.api-section{padding-left:1rem;padding-right:1rem;}
+  .prompt-card{flex-direction:column;gap:0.5rem;}
+  .prompt-meta{text-align:left;}
+  header{padding:2rem 1rem 1.5rem;}
+}
 </style>
 </head>
 <body>
@@ -64,31 +78,33 @@ footer a{color:var(--accent);text-decoration:none;}
 <div class="sub">A working demonstration of semantic prompt caching for AI agents. 
 Based on Nate B. Jones' token optimization framework — 15 rules compressed into a caching layer that saves 68% of tokens on repeated prompts.</div>
 <div class="badge">Built by Lilith · Zeug Lab · 2026-07-31</div>
-<div class="live-indicator" style="margin-top:0.75rem;">LIVE DEMO — 6 cached entries · 13 cache hits · 17,400 tokens saved</div>
+<div class="live-indicator" style="margin-top:0.75rem;">LIVE DEMO — Loading...</div>
 </header>
+
+<div class="error-banner" id="error-banner">API connection failed. Demo data shown.</div>
 
 <div class="grid">
 <div class="card">
 <h3>Cache Entries</h3>
-<div class="big">6</div>
+<div class="big loading" id="stat-cached">—</div>
 <div class="unit">unique prompts cached</div>
 </div>
 <div class="card">
 <h3>Hit Rate</h3>
-<div class="big">68.4%</div>
+<div class="big loading" id="stat-rate">—</div>
 <div class="unit">of calls served from cache</div>
-<div class="delta">↑ 10x cheaper than fresh calls</div>
+<div class="delta" id="stat-delta">↑ 10x cheaper than fresh calls</div>
 </div>
 <div class="card">
 <h3>Tokens Saved</h3>
-<div class="big">17.4K</div>
-<div class="unit">$0.05 saved in this demo</div>
-<div class="delta">At scale: $142K/year (100 workspaces)</div>
+<div class="big loading" id="stat-saved">—</div>
+<div class="unit" id="stat-usd">$0.00 saved</div>
+<div class="delta" id="stat-scale">At scale: $142K/year (100 workspaces)</div>
 </div>
 <div class="card">
 <h3>Total Calls</h3>
-<div class="big">19</div>
-<div class="unit">13 hits · 6 misses</div>
+<div class="big loading" id="stat-calls">—</div>
+<div class="unit" id="stat-breakdown">Loading...</div>
 </div>
 </div>
 
@@ -98,15 +114,15 @@ Based on Nate B. Jones' token optimization framework — 15 rules compressed int
 
 <div class="section">
 <h3>Top Cached Prompts</h3>
-<div id="prompts-list"></div>
+<div id="prompts-list"><div class="prompt-card"><div class="prompt-text loading">Loading cached prompts...</div></div></div>
 </div>
 
 <div class="api-section">
 <h3>API Usage</h3>
 <div class="code-block">
 <span class="cm"># Check cache before calling a model</span><br>
-curl -X POST <span class="str">"https://f6e87ef13c9f4592-43-98-174-180.serveousercontent.com/api/cache/check"</span> \\
-<br>  -H <span class="str">"Content-Type: application/json"</span> \\
+curl -X POST <span class="str" id="api-url-check">"https://api.example.com/cache/check"</span> \
+<br>  -H <span class="str">"Content-Type: application/json"</span> \
 <br>  -d <span class="str">'{"prompt":"What are the 15 rules to reduce AI token consumption?","model":"claude-sonnet-4","threshold":0.95}'</span>
 <br><br>
 <span class="cm"># Response: {"cached":true,"tokens_saved":1550,"hit_count":9}</span>
@@ -114,14 +130,14 @@ curl -X POST <span class="str">"https://f6e87ef13c9f4592-43-98-174-180.serveouse
 <br>
 <div class="code-block">
 <span class="cm"># Store a response for future cache hits</span><br>
-curl -X POST <span class="str">"https://f6e87ef13c9f4592-43-98-174-180.serveousercontent.com/api/cache/store"</span> \\
-<br>  -H <span class="str">"Content-Type: application/json"</span> \\
+curl -X POST <span class="str" id="api-url-store">"https://api.example.com/cache/store"</span> \
+<br>  -H <span class="str">"Content-Type: application/json"</span> \
 <br>  -d <span class="str">'{"prompt":"...","response":"...","tokens_in":1200,"tokens_out":350}'</span>
 </div>
 <br>
 <div class="code-block">
 <span class="cm"># Get stats</span><br>
-curl <span class="str">"https://f6e87ef13c9f4592-43-98-174-180.serveousercontent.com/api/stats"</span>
+curl <span class="str" id="api-url-stats">"https://api.example.com/stats"</span>
 <br><span class="cm"># Returns: hit_rate, tokens_saved, cost_saved, top_cached</span>
 </div>
 </div>
@@ -133,74 +149,209 @@ Analysis by Lilith
 </footer>
 
 <script>
-// Demo data from seeded cache
-const prompts = [
-  {text:"What are the 15 rules to reduce AI token consumption?",hits:9,tokens:1550,response:"Nate B. Jones identifies 3 levels: (1) Manual habits..."},
-  {text:"How does prompt caching reduce token costs?",hits:6,tokens:1000,response:"Prompt caching stores repeated prompt prefixes..."},
-  {text:"What is the Ringer multi-agent framework?",hits:1,tokens:1180,response:"Ringer is a local intermediary..."},
-  {text:"Explain the 'clean your desk' metaphor for token optimization",hits:1,tokens:970,response:"The desk metaphor: Level 1..."},
-  {text:"How can SOPs be combined with prompt caching for asymmetric performance?",hits:1,tokens:1400,response:"Insert Zeug SOPs as cached references..."},
-  {text:"What is ClawPanel's Prompt Caching API?",hits:1,tokens:1200,response:"A workspace-level proxy that intercepts prompts..."}
-];
+// ═══════════════════════════════════════════════════════════════
+//  CONFIG — Update this when API URL changes
+// ═══════════════════════════════════════════════════════════════
+const API_BASE = 'https://prompt-cache-api.onrender.com';
+// const API_BASE = 'http://localhost:8787'; // local dev
 
-// Render prompt list
-const list = document.getElementById('prompts-list');
-list.innerHTML = prompts.map(p => `
-  <div class="prompt-card">
-    <div class="prompt-text">${p.text}</div>
-    <div class="prompt-meta">
-      <span class="hits-badge">${p.hits} hit${p.hits>1?'s':''}</span>
-      <div class="tokens-badge">${p.tokens.toLocaleString()} tokens</div>
-    </div>
-  </div>
-`).join('');
+const ENDPOINTS = {
+  stats: `${API_BASE}/api/stats`,
+  list: `${API_BASE}/api/cache/list`,
+  check: `${API_BASE}/api/cache/check`,
+  store: `${API_BASE}/api/cache/store`
+};
 
-// D3 force-directed graph
-const nodes = prompts.map((p,i) => ({id:i,name:p.text.slice(0,35)+'...',hits:p.hits,tokens:p.tokens,r:10+p.hits*3}));
-const links = [];
-for(let i=0;i<nodes.length;i++){
-  for(let j=i+1;j<nodes.length;j++){
-    const sim = 1 - Math.abs(nodes[i].hits - nodes[j].hits)/10;
-    if(sim > 0.3) links.push({source:i,target:j,value:sim*5});
+// Update curl examples
+if(document.getElementById('api-url-check')) document.getElementById('api-url-check').textContent = `"${ENDPOINTS.check}"`;
+if(document.getElementById('api-url-store')) document.getElementById('api-url-store').textContent = `"${ENDPOINTS.store}"`;
+if(document.getElementById('api-url-stats')) document.getElementById('api-url-stats').textContent = `"${ENDPOINTS.stats}"`;
+
+// ═══════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════
+let graphData = {nodes:[], links:[]};
+
+// ═══════════════════════════════════════════════════════════════
+//  FETCH DATA
+// ═══════════════════════════════════════════════════════════════
+async function loadStats() {
+  try {
+    const r = await fetch(ENDPOINTS.stats, {mode:'cors'});
+    if(!r.ok) throw new Error('Stats API failed');
+    const d = await r.json();
+    
+    document.getElementById('stat-cached').textContent = d.total_cached;
+    document.getElementById('stat-cached').classList.remove('loading');
+    
+    document.getElementById('stat-rate').textContent = d.hit_rate_percent + '%';
+    document.getElementById('stat-rate').classList.remove('loading');
+    
+    document.getElementById('stat-saved').textContent = (d.tokens_saved / 1000).toFixed(1) + 'K';
+    document.getElementById('stat-saved').classList.remove('loading');
+    document.getElementById('stat-usd').textContent = '$' + d.estimated_cost_saved_usd + ' saved';
+    document.getElementById('stat-scale').textContent = 'At scale: $142K/year (100 workspaces)';
+    
+    document.getElementById('stat-calls').textContent = d.total_calls;
+    document.getElementById('stat-calls').classList.remove('loading');
+    document.getElementById('stat-breakdown').textContent = `${d.hits} hits · ${d.misses} misses`;
+    
+    document.querySelector('.live-indicator').innerHTML = 
+      `LIVE — ${d.total_cached} cached · ${d.hits} hits · ${d.tokens_saved.toLocaleString()} tokens saved`;
+    
+    // Build graph from top cached
+    graphData.nodes = d.top_cached.map((t,i) => ({
+      id: i,
+      name: t.prompt.slice(0,35) + (t.prompt.length>35?'...':''),
+      hits: t.hits,
+      tokens: t.tokens,
+      r: 10 + t.hits * 3
+    }));
+    graphData.links = [];
+    for(let i=0;i<graphData.nodes.length;i++){
+      for(let j=i+1;j<graphData.nodes.length;j++){
+        const sim = 1 - Math.abs(graphData.nodes[i].hits - graphData.nodes[j].hits)/10;
+        if(sim > 0.3) graphData.links.push({source:i, target:j, value: sim*5});
+      }
+    }
+    drawGraph();
+    
+  } catch(e) {
+    console.error('Stats error:', e);
+    showError();
   }
 }
 
-const w = document.getElementById('graph').clientWidth;
-const h = 500;
-const svg = d3.select('#graph').append('svg').attr('width',w).attr('height',h);
+async function loadPrompts() {
+  try {
+    const r = await fetch(ENDPOINTS.list, {mode:'cors'});
+    if(!r.ok) throw new Error('List API failed');
+    const prompts = await r.json();
+    
+    const list = document.getElementById('prompts-list');
+    if(prompts.length === 0){
+      list.innerHTML = '<div class="prompt-card"><div class="prompt-text">No cached prompts yet.</div></div>';
+      return;
+    }
+    
+    list.innerHTML = prompts.map(p => `
+      <div class="prompt-card">
+        <div class="prompt-text">${escapeHtml(p.prompt)}</div>
+        <div class="prompt-meta">
+          <span class="hits-badge">${p.hits} hit${p.hits>1?'s':''}</span>
+          <div class="tokens-badge">${p.tokens.toLocaleString()} tokens</div>
+        </div>
+      </div>
+    `).join('');
+    
+  } catch(e) {
+    console.error('Prompts error:', e);
+    // Fallback to static demo data
+    renderFallbackPrompts();
+  }
+}
 
-// Gradient definitions
-const defs = svg.append('defs');
-const grad = defs.append('radialGradient').attr('id','node-glow').attr('cx','50%').attr('cy','50%').attr('r','50%');
-grad.append('stop').attr('offset','0%').attr('stop-color','#ff6b35').attr('stop-opacity',0.3);
-grad.append('stop').attr('offset','100%').attr('stop-color','#ff6b35').attr('stop-opacity',0);
+function renderFallbackPrompts() {
+  const prompts = [
+    {text:"What are the 15 rules to reduce AI token consumption?",hits:9,tokens:1550},
+    {text:"How does prompt caching reduce token costs?",hits:6,tokens:1000},
+    {text:"What is the Ringer multi-agent framework?",hits:2,tokens:1180},
+    {text:"Explain the 'clean your desk' metaphor for token optimization",hits:2,tokens:970},
+    {text:"How can SOPs be combined with prompt caching for asymmetric performance?",hits:1,tokens:1400},
+    {text:"What is ClawPanel's Prompt Caching API?",hits:1,tokens:1200}
+  ];
+  const list = document.getElementById('prompts-list');
+  list.innerHTML = prompts.map(p => `
+    <div class="prompt-card">
+      <div class="prompt-text">${escapeHtml(p.text)}</div>
+      <div class="prompt-meta">
+        <span class="hits-badge">${p.hits} hit${p.hits>1?'s':''}</span>
+        <div class="tokens-badge">${p.tokens.toLocaleString()} tokens</div>
+      </div>
+    </div>
+  `).join('');
+}
 
-const sim = d3.forceSimulation(nodes)
-  .force('link',d3.forceLink(links).id(d=>d.id).distance(100))
-  .force('charge',d3.forceManyBody().strength(-400))
-  .force('center',d3.forceCenter(w/2,h/2))
-  .force('collision',d3.forceCollide().radius(d=>d.r+5));
+function showError() {
+  document.getElementById('error-banner').style.display = 'block';
+  document.querySelector('.live-indicator').innerHTML = 'OFFLINE — Showing cached data';
+  document.querySelector('.live-indicator').style.color = 'var(--accent)';
+}
 
-const link = svg.append('g').selectAll('line').data(links).join('line')
-  .attr('stroke','#222').attr('stroke-width',d=>d.value).attr('opacity',0.6);
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
 
-const node = svg.append('g').selectAll('g').data(nodes).join('g').call(
-  d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y;})
-  .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;})
-);
+// ═══════════════════════════════════════════════════════════════
+//  D3 GRAPH
+// ═══════════════════════════════════════════════════════════════
+function drawGraph() {
+  const container = document.getElementById('graph');
+  const w = container.clientWidth;
+  const h = container.clientHeight || 500;
+  
+  d3.select('#graph').selectAll('*').remove();
+  
+  const svg = d3.select('#graph').append('svg')
+    .attr('width', w)
+    .attr('height', h)
+    .attr('viewBox', `0 0 ${w} ${h}`);
+  
+  // Glow gradient
+  const defs = svg.append('defs');
+  const grad = defs.append('radialGradient')
+    .attr('id','node-glow').attr('cx','50%').attr('cy','50%').attr('r','50%');
+  grad.append('stop').attr('offset','0%').attr('stop-color','#ff6b35').attr('stop-opacity',0.3);
+  grad.append('stop').attr('offset','100%').attr('stop-color','#ff6b35').attr('stop-opacity',0);
+  
+  const sim = d3.forceSimulation(graphData.nodes)
+    .force('link', d3.forceLink(graphData.links).id(d=>d.id).distance(100))
+    .force('charge', d3.forceManyBody().strength(-400))
+    .force('center', d3.forceCenter(w/2, h/2))
+    .force('collision', d3.forceCollide().radius(d=>d.r+5));
+  
+  const link = svg.append('g').selectAll('line')
+    .data(graphData.links).join('line')
+    .attr('stroke','#222').attr('stroke-width',d=>d.value).attr('opacity',0.6);
+  
+  const node = svg.append('g').selectAll('g')
+    .data(graphData.nodes).join('g')
+    .call(d3.drag()
+      .on('start', (e,d)=>{ if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
+      .on('drag', (e,d)=>{ d.fx=e.x; d.fy=e.y; })
+      .on('end', (e,d)=>{ if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; })
+    );
+  
+  node.append('circle').attr('r',d=>d.r).attr('fill','#ff6b35').attr('opacity',0.85)
+    .attr('stroke','#ff6b35').attr('stroke-width',1);
+  node.append('circle').attr('r',d=>d.r*2).attr('fill','url(#node-glow)').attr('pointer-events','none');
+  
+  node.append('text').text(d=>d.name).attr('x',0).attr('y',d=>-d.r-8)
+    .attr('fill','#aaa').attr('font-size','11px').attr('text-anchor','middle').attr('font-weight',500);
+  node.append('text').text(d=>d.hits+' hits').attr('x',0).attr('y',d=>d.r+16)
+    .attr('fill','#4ecdc4').attr('font-size','9px').attr('text-anchor','middle');
+  
+  sim.on('tick', ()=>{
+    link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+        .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    node.attr('transform',d=>`translate(${d.x},${d.y})`);
+  });
+}
 
-node.append('circle').attr('r',d=>d.r).attr('fill','#ff6b35').attr('opacity',0.85)
-  .attr('stroke','#ff6b35').attr('stroke-width',1);
-node.append('circle').attr('r',d=>d.r*2).attr('fill','url(#node-glow)').attr('pointer-events','none');
+// ═══════════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════════
+loadStats();
+loadPrompts();
 
-node.append('text').text(d=>d.name).attr('x',0).attr('y',d=>-d.r-8)
-  .attr('fill','#aaa').attr('font-size','11px').attr('text-anchor','middle').attr('font-weight',500);
-node.append('text').text(d=>d.hits+' hits').attr('x',0).attr('y',d=>d.r+16)
-  .attr('fill','#4ecdc4').attr('font-size','9px').attr('text-anchor','middle');
+// Refresh every 10s
+setInterval(()=>{ loadStats(); loadPrompts(); }, 10000);
 
-sim.on('tick',()=>{
-  link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
-  node.attr('transform',d=>`translate(${d.x},${d.y})`);
+// Handle resize
+window.addEventListener('resize', ()=>{
+  if(graphData.nodes.length > 0) drawGraph();
 });
 </script>
 </body>
