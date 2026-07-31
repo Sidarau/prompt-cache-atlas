@@ -21,6 +21,48 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "cache.db")
 KIE_KEY = os.environ.get("KIE_AI_API_KEY", "")
+API_KEY = os.environ.get("PROMPT_CACHE_API_KEY", "")  # Set for production auth
+
+# Simple rate limiting
+rate_limit_store = {}
+RATE_LIMIT = 60  # requests per minute
+
+def check_auth():
+    """Check API key if configured."""
+    if not API_KEY:
+        return True
+    key = request.headers.get("X-API-Key", "")
+    return key == API_KEY
+
+def rate_limit():
+    """Simple rate limiting per IP."""
+    ip = request.remote_addr or "unknown"
+    now = time.time()
+    window = 60  # 1 minute
+    
+    if ip not in rate_limit_store:
+        rate_limit_store[ip] = []
+    
+    # Clean old entries
+    rate_limit_store[ip] = [t for t in rate_limit_store[ip] if now - t < window]
+    
+    if len(rate_limit_store[ip]) >= RATE_LIMIT:
+        return False
+    
+    rate_limit_store[ip].append(now)
+    return True
+
+def require_auth(f):
+    """Decorator to require API key if configured."""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not check_auth():
+            return jsonify({"error": "Unauthorized — invalid or missing X-API-Key header"}), 401
+        if not rate_limit():
+            return jsonify({"error": "Rate limit exceeded — 60 requests per minute"}), 429
+        return f(*args, **kwargs)
+    return decorated
 
 # ── Seed data ───────────────────────────────────────────────────
 SEED_PROMPTS = [
@@ -174,9 +216,16 @@ def index():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok", "version": "1.0.0", "cached_entries": _count_entries()})
+    return jsonify({
+        "status": "ok",
+        "version": "1.1.0",
+        "cached_entries": _count_entries(),
+        "auth_enabled": bool(API_KEY),
+        "rate_limit": RATE_LIMIT
+    })
 
 @app.route("/api/cache/list")
+@require_auth
 def cache_list():
     """Return all cached entries for the atlas."""
     conn = db_conn()
@@ -196,6 +245,7 @@ def cache_list():
     return jsonify(rows)
 
 @app.route("/api/cache/check", methods=["POST"])
+@require_auth
 def cache_check():
     data = request.json or {}
     prompt = data.get("prompt", "").strip()
@@ -265,6 +315,7 @@ def cache_check():
     return jsonify({"cached": False, "prompt_hash": h})
 
 @app.route("/api/cache/store", methods=["POST"])
+@require_auth
 def cache_store():
     data = request.json or {}
     prompt = data.get("prompt", "").strip()
@@ -296,6 +347,7 @@ def cache_store():
     return jsonify({"stored": True, "prompt_hash": h})
 
 @app.route("/api/stats")
+@require_auth
 def stats():
     ws = request.args.get("workspace", "default")
     conn = db_conn()
@@ -334,6 +386,7 @@ def stats():
     })
 
 @app.route("/api/calls")
+@require_auth
 def calls():
     ws = request.args.get("workspace", "default")
     conn = db_conn()
@@ -344,6 +397,7 @@ def calls():
     return jsonify(rows)
 
 @app.route("/api/workspaces")
+@require_auth
 def workspaces():
     conn = db_conn()
     c = conn.cursor()
@@ -357,6 +411,7 @@ def workspaces():
 #  Store large SOPs as hash references for massive token savings
 # ═══════════════════════════════════════════════════════════════
 @app.route("/api/sop/store", methods=["POST"])
+@require_auth
 def sop_store():
     data = request.json or {}
     name = data.get("name", "").strip()
@@ -387,6 +442,7 @@ def sop_store():
     })
 
 @app.route("/api/sop/get")
+@require_auth
 def sop_get():
     h = request.args.get("hash", "").strip()
     ws = request.args.get("workspace", "default")
@@ -414,6 +470,7 @@ def sop_get():
     return jsonify({"found": False})
 
 @app.route("/api/sop/list")
+@require_auth
 def sop_list():
     ws = request.args.get("workspace", "default")
     conn = db_conn()
