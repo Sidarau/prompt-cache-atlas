@@ -105,7 +105,7 @@ Based on Nate B. Jones' token optimization framework — 15 rules compressed int
 <h3>API Usage</h3>
 <div class="code-block">
 <span class="cm"># Check cache before calling a model</span><br>
-curl -X POST <span class="str">"https://your-app.com/api/cache/check"</span> \\
+curl -X POST <span class="str">"https://f6e87ef13c9f4592-43-98-174-180.serveousercontent.com/api/cache/check"</span> \\
 <br>  -H <span class="str">"Content-Type: application/json"</span> \\
 <br>  -d <span class="str">'{"prompt":"What are the 15 rules to reduce AI token consumption?","model":"claude-sonnet-4","threshold":0.95}'</span>
 <br><br>
@@ -114,14 +114,14 @@ curl -X POST <span class="str">"https://your-app.com/api/cache/check"</span> \\
 <br>
 <div class="code-block">
 <span class="cm"># Store a response for future cache hits</span><br>
-curl -X POST <span class="str">"https://your-app.com/api/cache/store"</span> \\
+curl -X POST <span class="str">"https://f6e87ef13c9f4592-43-98-174-180.serveousercontent.com/api/cache/store"</span> \\
 <br>  -H <span class="str">"Content-Type: application/json"</span> \\
 <br>  -d <span class="str">'{"prompt":"...","response":"...","tokens_in":1200,"tokens_out":350}'</span>
 </div>
 <br>
 <div class="code-block">
 <span class="cm"># Get stats</span><br>
-curl <span class="str">"https://your-app.com/api/stats"</span>
+curl <span class="str">"https://f6e87ef13c9f4592-43-98-174-180.serveousercontent.com/api/stats"</span>
 <br><span class="cm"># Returns: hit_rate, tokens_saved, cost_saved, top_cached</span>
 </div>
 </div>
