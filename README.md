@@ -163,12 +163,34 @@ The frontend is static HTML and works on any static host:
 https://your-frontend.com/?api=https://your-api.com
 ```
 
-## Environment Variables
+## Security
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `KIE_AI_API_KEY` | No | For semantic similarity via KIE AI embeddings |
-| `PORT` | No | Flask port (default: 8787) |
+### API Key Authentication (optional)
+
+Set `PROMPT_CACHE_API_KEY` to enable authentication:
+
+```bash
+export PROMPT_CACHE_API_KEY="your-secret-key"
+```
+
+When enabled, all API endpoints require the `X-API-Key` header:
+
+```bash
+curl -X POST https://your-api.com/api/cache/check \
+  -H "X-API-Key: your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"..."}'
+```
+
+### Rate Limiting
+
+All endpoints are rate-limited to 60 requests per minute per IP.
+
+Response headers include rate limit status:
+```
+X-RateLimit-Limit: 60
+X-RateLimit-Remaining: 59
+```
 
 ## Token Savings Model
 
@@ -191,10 +213,11 @@ Based on Claude 3.5 Sonnet pricing ($3/M input, $15/M output):
 - [x] Workspace scoping
 - [x] SOP caching
 - [x] Live dashboard
+- [x] API key authentication
+- [x] Rate limiting
 - [ ] ZME integration
 - [ ] ClawPanel auth/RLS
 - [ ] Redis backend option
-- [ ] Rate limiting
 
 ## Credits
 
