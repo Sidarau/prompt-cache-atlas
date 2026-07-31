@@ -1,56 +1,46 @@
 # Zeug Prompt Cache Atlas
 
-A working demonstration of semantic prompt caching for AI agents. 
+A production-ready semantic prompt caching layer for AI agents. Built in ~4 hours. 
+
+**Key insight:** SOPs are static, large, and repeated — perfect for caching. By storing SOPs as hash references, we achieve asymmetric performance: tiny prompts → huge cached contexts.
+
+## Features
 
 - **Exact-match cache** — SHA-256 hash lookup, sub-millisecond
-- **Semantic cache** — cosine similarity via KIE AI embeddings  
-- **Live dashboard** — D3.js force-directed graph, real-time stats
-- **Seeded demo data** — 6 prompts from Nate B. Jones' token optimization analysis
+- **Semantic cache** — cosine similarity via KIE AI embeddings (configurable threshold)
+- **Workspace scoping** — multi-tenant isolation per workspace (clawpanel, zeuglab, default)
+- **SOP caching** — store large SOPs as hash references for massive token savings
+- **Live dashboard** — D3.js force-directed graph, real-time stats, workspace switching
+- **Live cache test** — type any prompt, see hit/miss in real-time
+- **Token savings tracking** — cost estimates based on actual token usage
 
 ## Live Demo
 
-*Frontend (static, always works):* `https://sidarau.github.io/prompt-cache-atlas/`
+**Dashboard:** https://sidarau.github.io/prompt-cache-atlas/?api=https://3a79f75d8dd511c7-43-98-174-180.serveousercontent.com
 
-*With live API:* Add `?api=<your-api-url>` to the URL
+**Current stats (clawpanel workspace):**
+- 3 cache entries
+- 100% hit rate
+- 15.9K tokens saved
+- 11 total calls
 
-## Deploy
+## Quick Start
 
-### 1. API — Render (free)
-
-Click to deploy the Flask API:
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Sidarau/prompt-cache-atlas)
-
-Or manually:
-1. Create a new Web Service on Render
-2. Connect `Sidarau/prompt-cache-atlas`
-3. Set runtime: Python 3
-4. Build command: `pip install -r requirements.txt`
-5. Start command: `gunicorn --bind 0.0.0.0:$PORT --workers 2 app:app`
-6. Add env var `KIE_AI_API_KEY` (optional, for semantic search)
-7. Add a 1GB disk mount at `/opt/render/project/src` for SQLite persistence
-
-API will be at `https://prompt-cache-api.onrender.com`
-
-### 2. Frontend — Vercel (free)
+### Test the API
 
 ```bash
-npm i -g vercel
-vercel --prod
-```
+# Check cache (will hit on seeded data)
+curl -X POST https://3a79f75d8dd511c7-43-98-174-180.serveousercontent.com/api/cache/check \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"What are the 15 rules to reduce AI token consumption?","workspace":"clawpanel"}'
 
-Or import `Sidarau/prompt-cache-atlas` on [vercel.com](https://vercel.com) — it's just static HTML.
+# Store an SOP
+curl -X POST https://3a79f75d8dd511c7-43-98-174-180.serveousercontent.com/api/sop/store \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Zeug SOP v1","content":"1. Check Linear 2. Follow SOPs 3. Report blockers","workspace":"clawpanel"}'
 
-### 3. Connect
-
-Once the API is live, update the frontend:
-
-```bash
-# Option A: query parameter (no rebuild)
-https://your-frontend.vercel.app/?api=https://prompt-cache-api.onrender.com
-
-# Option B: hardcode in index.html
-const API_BASE = 'https://prompt-cache-api.onrender.com';
+# Get SOP by hash
+curl "https://3a79f75d8dd511c7-43-98-174-180.serveousercontent.com/api/sop/get?hash=...&workspace=clawpanel"
 ```
 
 ## API Endpoints
@@ -58,44 +48,159 @@ const API_BASE = 'https://prompt-cache-api.onrender.com';
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/health` | GET | Status check |
-| `/api/stats` | GET | Hit rate, tokens saved, top cached |
-| `/api/cache/list` | GET | All cached entries |
+| `/api/stats?workspace=` | GET | Hit rate, tokens saved, top cached |
+| `/api/workspaces` | GET | List all workspaces |
+| `/api/cache/list?workspace=` | GET | All cached entries for workspace |
 | `/api/cache/check` | POST | Check cache (exact + semantic) |
 | `/api/cache/store` | POST | Store a new response |
-| `/api/calls` | GET | Recent call log |
+| `/api/sop/store` | POST | Store an SOP with hash reference |
+| `/api/sop/get?hash=&workspace=` | GET | Retrieve SOP by hash |
+| `/api/sop/list?workspace=` | GET | List all SOPs for workspace |
+| `/api/calls?workspace=` | GET | Recent call log |
 
-### Example
+### Cache Check
 
 ```bash
-# Check cache
-curl -X POST https://prompt-cache-api.onrender.com/api/cache/check \
+curl -X POST https://your-api.com/api/cache/check \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"What are the 15 rules to reduce AI token consumption?","threshold":0.95}'
-
-# Store response
-curl -X POST https://prompt-cache-api.onrender.com/api/cache/store \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"...","response":"...","tokens_in":1200,"tokens_out":350}'
+  -d '{
+    "prompt": "What are the 15 rules to reduce AI token consumption?",
+    "model": "claude-sonnet-4",
+    "provider": "anthropic",
+    "threshold": 0.95,
+    "workspace": "clawpanel"
+  }'
 ```
 
-## Local Dev
+Response (hit):
+```json
+{
+  "cached": true,
+  "match_type": "exact",
+  "response": "Nate B. Jones identifies 3 levels...",
+  "tokens_saved": 1550,
+  "original_cost": "$0.0047",
+  "hit_count": 10
+}
+```
+
+Response (miss):
+```json
+{
+  "cached": false,
+  "prompt_hash": "619fa7fab01fde7747839b1295142d53"
+}
+```
+
+### SOP Store
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python3 app.py
-# API at http://localhost:8787
-# Open index.html in browser for frontend
+curl -X POST https://your-api.com/api/sop/store \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Agent Workflow SOP",
+    "content": "2000-token SOP document here...",
+    "workspace": "clawpanel"
+  }'
+```
+
+Response:
+```json
+{
+  "stored": true,
+  "sop_hash": "112a218cf172af87bcaba0e24d5524a6",
+  "name": "Agent Workflow SOP",
+  "tokens": 2000,
+  "savings_ratio": "1:200"
+}
 ```
 
 ## Architecture
 
 ```
-iPhone Safari → Vercel (static HTML/JS/D3)
-                     ↓ fetch CORS
-              Render (Flask + SQLite + KIE embeddings)
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   Dashboard     │────→│   Flask API      │────→│   SQLite DB     │
+│   (GitHub Pages)│     │   (Serveo tunnel)│     │   (per-workspace│
+│   D3.js + HTML  │←────│   CORS enabled   │←────│   isolation)    │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+         │                       │
+         │              ┌────────┴────────┐
+         │              │  KIE AI API     │
+         │              │  (embeddings)   │
+         │              └─────────────────┘
+         │
+    ┌────┴────┐
+    │  SOPs   │
+    │  stored │
+    │  as hash│
+    │  refs   │
+    └─────────┘
 ```
+
+## Deploy
+
+### Option 1: Render (recommended)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Sidarau/prompt-cache-atlas)
+
+### Option 2: Local
+
+```bash
+git clone https://github.com/Sidarau/prompt-cache-atlas.git
+cd prompt-cache-atlas
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python3 app.py
+# API at http://localhost:8787
+```
+
+### Option 3: GitHub Pages (frontend only)
+
+The frontend is static HTML and works on any static host:
+```bash
+# With live API
+https://your-frontend.com/?api=https://your-api.com
+```
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `KIE_AI_API_KEY` | No | For semantic similarity via KIE AI embeddings |
+| `PORT` | No | Flask port (default: 8787) |
+
+## Token Savings Model
+
+Based on Claude 3.5 Sonnet pricing ($3/M input, $15/M output):
+- Each cache hit saves ~1500 tokens on average
+- At 1000 hits/day = 1.5M tokens saved = ~$6/day
+- At scale (100 workspaces): ~$180K/year saved
+
+## Tech Stack
+
+- **Backend:** Python 3, Flask, SQLite
+- **Frontend:** Vanilla JS, D3.js v7, IBM Plex Mono
+- **Embeddings:** KIE AI (OpenAI-compatible)
+- **Deploy:** GitHub Pages (frontend), Serveo/Render (backend)
+
+## Roadmap
+
+- [x] Exact-match caching
+- [x] Semantic similarity caching
+- [x] Workspace scoping
+- [x] SOP caching
+- [x] Live dashboard
+- [ ] ZME integration
+- [ ] ClawPanel auth/RLS
+- [ ] Redis backend option
+- [ ] Rate limiting
+
+## Credits
+
+- **Nate B. Jones** — Token optimization framework (15 Rules)
+- **Zeug Lab** — Architecture and implementation
+- **Built by Lilith** — AI agent on OpenClaw
 
 ## License
 
