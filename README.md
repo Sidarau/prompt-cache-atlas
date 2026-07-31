@@ -16,7 +16,7 @@ A production-ready semantic prompt caching layer for AI agents. Built in ~4 hour
 
 ## Live Demo
 
-**Dashboard:** https://sidarau.github.io/prompt-cache-atlas/?api=https://3a79f75d8dd511c7-43-98-174-180.serveousercontent.com
+**Dashboard:** https://sidarau.github.io/prompt-cache-atlas/?api=https://7c3fcfa01e9e5892-43-98-174-180.serveousercontent.com
 
 **Current stats (clawpanel workspace):**
 - 3 cache entries
@@ -30,17 +30,17 @@ A production-ready semantic prompt caching layer for AI agents. Built in ~4 hour
 
 ```bash
 # Check cache (will hit on seeded data)
-curl -X POST https://3a79f75d8dd511c7-43-98-174-180.serveousercontent.com/api/cache/check \
+curl -X POST https://7c3fcfa01e9e5892-43-98-174-180.serveousercontent.com/api/cache/check \
   -H "Content-Type: application/json" \
   -d '{"prompt":"What are the 15 rules to reduce AI token consumption?","workspace":"clawpanel"}'
 
 # Store an SOP
-curl -X POST https://3a79f75d8dd511c7-43-98-174-180.serveousercontent.com/api/sop/store \
+curl -X POST https://7c3fcfa01e9e5892-43-98-174-180.serveousercontent.com/api/sop/store \
   -H "Content-Type: application/json" \
   -d '{"name":"Zeug SOP v1","content":"1. Check Linear 2. Follow SOPs 3. Report blockers","workspace":"clawpanel"}'
 
 # Get SOP by hash
-curl "https://3a79f75d8dd511c7-43-98-174-180.serveousercontent.com/api/sop/get?hash=...&workspace=clawpanel"
+curl "https://7c3fcfa01e9e5892-43-98-174-180.serveousercontent.com/api/sop/get?hash=...&workspace=clawpanel"
 ```
 
 ## API Endpoints

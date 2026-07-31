@@ -25,7 +25,7 @@ import os
 import requests
 from typing import Callable, Optional
 
-DEFAULT_API = "https://3a79f75d8dd511c7-43-98-174-180.serveousercontent.com"
+DEFAULT_API = "https://7c3fcfa01e9e5892-43-98-174-180.serveousercontent.com"
 API_BASE = os.environ.get("ZEUG_CACHE_API", DEFAULT_API).rstrip("/")
 DEFAULT_WORKSPACE = os.environ.get("ZEUG_CACHE_WORKSPACE", "default")
 
