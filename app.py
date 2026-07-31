@@ -352,6 +352,86 @@ def workspaces():
     conn.close()
     return jsonify({"workspaces": ws})
 
+# ═══════════════════════════════════════════════════════════════
+#  SOP CACHING — Asymmetric Performance
+#  Store large SOPs as hash references for massive token savings
+# ═══════════════════════════════════════════════════════════════
+@app.route("/api/sop/store", methods=["POST"])
+def sop_store():
+    data = request.json or {}
+    name = data.get("name", "").strip()
+    content = data.get("content", "").strip()
+    ws = data.get("workspace", "default")
+    
+    if not name or not content:
+        return jsonify({"error": "name and content required"}), 400
+    
+    h = hash_prompt(content)
+    tokens = len(content.split())  # rough estimate
+    
+    conn = db_conn()
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO cache_entries 
+        (workspace_id, prompt_hash, prompt_text, response_text, model, provider, tokens_in, tokens_out, created_at, hit_count)
+        VALUES (?,?,?,?,?,?,?,?,?,1)''',
+        (ws, h, f"SOP:{name}", content, "sop", "zeuglab", tokens, 0, time.time()))
+    conn.commit()
+    conn.close()
+    
+    return jsonify({
+        "stored": True,
+        "sop_hash": h,
+        "name": name,
+        "tokens": tokens,
+        "savings_ratio": f"1:{tokens // 10}"  # 10 chars for hash vs full content
+    })
+
+@app.route("/api/sop/get")
+def sop_get():
+    h = request.args.get("hash", "").strip()
+    ws = request.args.get("workspace", "default")
+    
+    if not h:
+        return jsonify({"error": "hash required"}), 400
+    
+    conn = db_conn()
+    c = conn.cursor()
+    c.execute("SELECT response_text, tokens_in, hit_count FROM cache_entries WHERE workspace_id=? AND prompt_hash=? AND model='sop'", (ws, h))
+    row = c.fetchone()
+    
+    if row:
+        c.execute("UPDATE cache_entries SET hit_count = hit_count + 1 WHERE workspace_id=? AND prompt_hash=?", (ws, h))
+        conn.commit()
+        conn.close()
+        return jsonify({
+            "found": True,
+            "content": row[0],
+            "tokens": row[1],
+            "hits": row[2] + 1
+        })
+    
+    conn.close()
+    return jsonify({"found": False})
+
+@app.route("/api/sop/list")
+def sop_list():
+    ws = request.args.get("workspace", "default")
+    conn = db_conn()
+    c = conn.cursor()
+    c.execute("SELECT prompt_text, prompt_hash, tokens_in, hit_count, created_at FROM cache_entries WHERE workspace_id=? AND model='sop' ORDER BY hit_count DESC", (ws,))
+    rows = []
+    for r in c.fetchall():
+        name = r[0].replace("SOP:", "")
+        rows.append({
+            "name": name,
+            "hash": r[1][:16],
+            "tokens": r[2],
+            "hits": r[3],
+            "created_at": datetime.fromtimestamp(r[4]).isoformat()
+        })
+    conn.close()
+    return jsonify(rows)
+
 def _count_entries():
     conn = db_conn()
     c = conn.cursor()
