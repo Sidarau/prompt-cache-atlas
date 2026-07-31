@@ -149,6 +149,32 @@ Based on Nate B. Jones' token optimization framework — repeated prompts cached
 <div id="sop-result" style="margin-top:0.5rem;font-size:0.8rem;color:#aaa;"></div>
 </div>
 
+<div class="section">
+<h3>💰 Savings Calculator</h3>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-top:1rem">
+  <div class="card" style="padding:1rem">
+    <h3 style="margin-bottom:0.5rem">Current</h3>
+    <div class="big" id="calc-current" style="font-size:1.5rem">$0.05</div>
+    <div class="unit">saved so far</div>
+  </div>
+  <div class="card" style="padding:1rem">
+    <h3 style="margin-bottom:0.5rem">Daily (1K hits)</h3>
+    <div class="big" id="calc-daily" style="font-size:1.5rem">$4.50</div>
+    <div class="unit">per day</div>
+  </div>
+  <div class="card" style="padding:1rem">
+    <h3 style="margin-bottom:0.5rem">Monthly (10K hits)</h3>
+    <div class="big" id="calc-monthly" style="font-size:1.5rem">$135</div>
+    <div class="unit">per month</div>
+  </div>
+  <div class="card" style="padding:1rem">
+    <h3 style="margin-bottom:0.5rem">Annual (100 workspaces)</h3>
+    <div class="big" id="calc-annual" style="font-size:1.5rem">$162K</div>
+    <div class="unit">per year</div>
+  </div>
+</div>
+</div>
+
 <div class="api-section">
 <h3>API Usage</h3>
 <div class="code-block">
@@ -318,6 +344,25 @@ function renderStats(d) {
   document.getElementById('stat-calls').textContent = d.total_calls;
   document.getElementById('stat-calls').classList.remove('loading');
   document.getElementById('stat-breakdown').textContent = `${d.hits} hits · ${d.misses} misses`;
+  
+  // Update savings calculator
+  const avgTokensPerHit = d.hits > 0 ? d.tokens_saved / d.hits : 1500;
+  const costPer1K = 0.003; // $3 per 1M tokens = $0.003 per 1K
+  
+  const currentSaved = d.estimated_cost_saved_usd || 0;
+  const dailySaved = (1000 * avgTokensPerHit / 1000 * costPer1K).toFixed(2);
+  const monthlySaved = (10000 * avgTokensPerHit / 1000 * costPer1K).toFixed(0);
+  const annualSaved = (100 * 10000 * avgTokensPerHit / 1000 * costPer1K / 1000).toFixed(0);
+  
+  const calcCurrent = document.getElementById('calc-current');
+  const calcDaily = document.getElementById('calc-daily');
+  const calcMonthly = document.getElementById('calc-monthly');
+  const calcAnnual = document.getElementById('calc-annual');
+  
+  if(calcCurrent) calcCurrent.textContent = '$' + currentSaved.toFixed(2);
+  if(calcDaily) calcDaily.textContent = '$' + dailySaved;
+  if(calcMonthly) calcMonthly.textContent = '$' + monthlySaved;
+  if(calcAnnual) calcAnnual.textContent = '$' + annualSaved + 'K';
 }
 
 async function loadPrompts() {
