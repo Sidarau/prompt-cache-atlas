@@ -138,6 +138,17 @@ Based on Nate B. Jones' token optimization framework — repeated prompts cached
 <div id="test-result" style="margin-top:0.75rem;font-size:0.85rem;color:#aaa;min-height:2rem"></div>
 </div>
 
+<div class="section">
+<h3>📋 SOP Cache — Asymmetric Token Savings</h3>
+<div id="sop-list" style="margin-bottom:1rem"><div class="prompt-card"><div class="prompt-text loading">Loading SOPs...</div></div></div>
+<div style="display:flex;gap:0.5rem;margin-top:1rem">
+  <input id="sop-name" type="text" placeholder="SOP name..." style="flex:1;background:#111;border:1px solid #222;color:#f1f0ec;padding:0.5rem 0.75rem;border-radius:4px;font-size:0.8rem">
+  <input id="sop-content" type="text" placeholder="SOP content..." style="flex:2;background:#111;border:1px solid #222;color:#f1f0ec;padding:0.5rem 0.75rem;border-radius:4px;font-size:0.8rem">
+  <button onclick="storeSop()" style="background:#4ecdc4;color:#0b0b0d;border:none;padding:0.5rem 1rem;border-radius:4px;font-weight:600;cursor:pointer;font-size:0.8rem">Store SOP</button>
+</div>
+<div id="sop-result" style="margin-top:0.5rem;font-size:0.8rem;color:#aaa;"></div>
+</div>
+
 <div class="api-section">
 <h3>API Usage</h3>
 <div class="code-block">
@@ -457,13 +468,57 @@ async function testCache(){
   btn.textContent = 'Test Cache';
 }
 
+async function loadSops() {
+  if (DEMO_MODE) {
+    document.getElementById('sop-list').innerHTML = '<div class="prompt-card"><div class="prompt-text">No SOPs in demo mode</div></div>';
+    return;
+  }
+  try {
+    const r = await fetch(`${API_BASE}/api/sop/list?workspace=${encodeURIComponent(currentWorkspace)}`, {mode:'cors'});
+    if(!r.ok) throw new Error('SOP list failed');
+    const sops = await r.json();
+    const list = document.getElementById('sop-list');
+    if (!sops.length) {
+      list.innerHTML = '<div class="prompt-card"><div class="prompt-text" style="color:var(--fog)">No SOPs cached yet. Store one below.</div></div>';
+      return;
+    }
+    list.innerHTML = sops.map(s => `
+      <div class="prompt-card">
+        <div class="prompt-text">${escapeHtml(s.name)}<br><small style="color:var(--fog)">Hash: ${s.hash} · ${s.tokens} tokens · ${s.hits} hits</small></div>
+      </div>
+    `).join('');
+  } catch(e) {
+    console.error('SOP load error:', e);
+  }
+}
+
+async function storeSop() {
+  const name = document.getElementById('sop-name').value;
+  const content = document.getElementById('sop-content').value;
+  if (!name || !content) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/sop/store`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, content, workspace: currentWorkspace})
+    });
+    const d = await r.json();
+    document.getElementById('sop-result').innerHTML = 
+      `<span style="color:#4ecdc4">✓ SOP stored</span> — Hash: ${d.sop_hash} · ${d.tokens} tokens · Ratio: ${d.savings_ratio}`;
+    loadSops();
+  } catch(e) {
+    document.getElementById('sop-result').innerHTML = '<span style="color:#ff6b35">Error: ' + e.message + '</span>';
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  INIT
 // ═══════════════════════════════════════════════════════════════
 loadWorkspaces();
 loadStats();
 loadPrompts();
-setInterval(()=>{ loadStats(); loadPrompts(); }, 10000);
+loadSops();
+setInterval(()=>{ loadStats(); loadPrompts(); loadSops(); }, 10000);
 window.addEventListener('resize', ()=>{ if(graphData.nodes.length > 0) drawGraph(); });
 </script>
 </body>
