@@ -83,6 +83,12 @@ footer a{color:var(--accent);text-decoration:none;}
 Based on Nate B. Jones' token optimization framework — repeated prompts cached to save tokens and cost.</div>
 <div class="badge">Built by Lilith · Zeug Lab · 2026-07-31</div>
 <div class="live-indicator" style="margin-top:0.75rem;">LIVE DEMO — Loading...</div>
+<div id="workspace-bar" style="margin-top:0.5rem;display:none;align-items:center;gap:0.5rem;font-size:0.75rem;color:var(--fog);">
+  <span>Workspace:</span>
+  <select id="workspace-select" onchange="switchWorkspace(this.value)" style="background:#111;border:1px solid #222;color:var(--bone);padding:0.25rem 0.5rem;border-radius:4px;font-size:0.7rem;cursor:pointer;">
+    <option value="default">default</option>
+  </select>
+</div>
 </header>
 
 <div class="error-banner" id="error-banner">API connection failed. Showing cached demo data.</div>
@@ -119,6 +125,17 @@ Based on Nate B. Jones' token optimization framework — repeated prompts cached
 <div class="section">
 <h3>Top Cached Prompts</h3>
 <div id="prompts-list"><div class="prompt-card"><div class="prompt-text loading">Loading cached prompts...</div></div></div>
+</div>
+
+<div class="section">
+<h3>⚡ Live Cache Test</h3>
+<div style="display:flex;gap:0.75rem;margin-top:1rem">
+  <input id="test-prompt" type="text" placeholder="Enter a prompt to test cache..." 
+    style="flex:1;background:#111;border:1px solid #222;color:#f1f0ec;padding:0.75rem 1rem;border-radius:6px;font-size:0.9rem">
+  <button id="test-btn" onclick="testCache()" 
+    style="background:#ff6b35;color:#fff;border:none;padding:0.75rem 1.5rem;border-radius:6px;font-weight:600;cursor:pointer">Test Cache</button>
+</div>
+<div id="test-result" style="margin-top:0.75rem;font-size:0.85rem;color:#aaa;min-height:2rem"></div>
 </div>
 
 <div class="api-section">
@@ -170,8 +187,22 @@ const ENDPOINTS = DEMO_MODE ? null : {
   stats: `${API_BASE}/api/stats`,
   list: `${API_BASE}/api/cache/list`,
   check: `${API_BASE}/api/cache/check`,
-  store: `${API_BASE}/api/cache/store`
+  store: `${API_BASE}/api/cache/store`,
+  workspaces: `${API_BASE}/api/workspaces`
 };
+
+// Workspace state
+let currentWorkspace = 'default';
+try { currentWorkspace = localStorage.getItem('pca_workspace') || 'default'; } catch(e){}
+
+function updateEndpoints() {
+  if (DEMO_MODE) return;
+  ENDPOINTS.stats = `${API_BASE}/api/stats?workspace=${encodeURIComponent(currentWorkspace)}`;
+  ENDPOINTS.list = `${API_BASE}/api/cache/list?workspace=${encodeURIComponent(currentWorkspace)}`;
+  ENDPOINTS.check = `${API_BASE}/api/cache/check`;
+  ENDPOINTS.store = `${API_BASE}/api/cache/store`;
+}
+updateEndpoints();
 
 // Update curl examples
 if (!DEMO_MODE) {
@@ -208,6 +239,33 @@ const DEMO_STATS = {
 let graphData = {nodes:[], links:[]};
 
 // ═══════════════════════════════════════════════════════════════
+//  WORKSPACE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════
+async function loadWorkspaces() {
+  if (DEMO_MODE) return;
+  try {
+    const r = await fetch(ENDPOINTS.workspaces, {mode:'cors'});
+    if(!r.ok) return;
+    const d = await r.json();
+    const select = document.getElementById('workspace-select');
+    select.innerHTML = d.workspaces.map(ws => 
+      `<option value="${ws}" ${ws===currentWorkspace?'selected':''}>${ws}</option>`
+    ).join('');
+    document.getElementById('workspace-bar').style.display = 'flex';
+  } catch(e) {
+    console.error('Workspaces error:', e);
+  }
+}
+
+function switchWorkspace(ws) {
+  currentWorkspace = ws;
+  try { localStorage.setItem('pca_workspace', ws); } catch(e){}
+  updateEndpoints();
+  loadStats();
+  loadPrompts();
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  FETCH DATA
 // ═══════════════════════════════════════════════════════════════
 async function loadStats() {
@@ -224,8 +282,9 @@ async function loadStats() {
     const d = await r.json();
     renderStats(d);
     buildGraph(d);
+    const wsLabel = d.workspace ? `[${d.workspace}] ` : '';
     document.querySelector('.live-indicator').innerHTML = 
-      `LIVE — ${d.total_cached} cached · ${d.hits} hits · ${d.tokens_saved.toLocaleString()} tokens saved`;
+      `${wsLabel}LIVE — ${d.total_cached} cached · ${d.hits} hits · ${d.tokens_saved.toLocaleString()} tokens saved`;
   } catch(e) {
     console.error('Stats error:', e);
     showError();
@@ -372,9 +431,36 @@ function drawGraph() {
   });
 }
 
+async function testCache(){
+  const prompt = document.getElementById('test-prompt').value;
+  if(!prompt) return;
+  const btn = document.getElementById('test-btn');
+  btn.textContent = 'Checking...';
+  try {
+    const r = await fetch(ENDPOINTS.check,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({prompt, model:'claude-sonnet-4', threshold:0.85, workspace: currentWorkspace})
+    });
+    const d = await r.json();
+    const out = document.getElementById('test-result');
+    if(d.cached){
+      out.innerHTML = `<span style="color:#4ecdc4">✓ CACHE HIT</span> — ${d.match_type} match<br><small>${d.tokens_saved} tokens saved · ${d.hit_count} total hits</small>`;
+    } else {
+      out.innerHTML = `<span style="color:#ff6b35">✗ CACHE MISS</span><br><small>Hash: ${d.prompt_hash}</small>`;
+    }
+    loadStats();
+    loadPrompts();
+  } catch(e) {
+    document.getElementById('test-result').innerHTML = '<span style="color:#ff6b35">Error: ' + e.message + '</span>';
+  }
+  btn.textContent = 'Test Cache';
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  INIT
 // ═══════════════════════════════════════════════════════════════
+loadWorkspaces();
 loadStats();
 loadPrompts();
 setInterval(()=>{ loadStats(); loadPrompts(); }, 10000);
