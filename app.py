@@ -75,7 +75,8 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS cache_entries (
             id INTEGER PRIMARY KEY,
-            prompt_hash TEXT UNIQUE,
+            workspace_id TEXT DEFAULT 'default',
+            prompt_hash TEXT,
             prompt_text TEXT,
             response_text TEXT,
             model TEXT,
@@ -84,12 +85,14 @@ def init_db():
             tokens_out INTEGER,
             created_at REAL,
             hit_count INTEGER DEFAULT 1,
-            embedding BLOB
+            embedding BLOB,
+            UNIQUE(workspace_id, prompt_hash)
         )
     ''')
     c.execute('''
         CREATE TABLE IF NOT EXISTS calls (
             id INTEGER PRIMARY KEY,
+            workspace_id TEXT DEFAULT 'default',
             prompt_hash TEXT,
             was_hit BOOLEAN,
             tokens_in INTEGER,
@@ -110,19 +113,20 @@ def seed_db():
         conn.close()
         return
     
-    for item in SEED_PROMPTS:
+    workspaces = ['clawpanel', 'zeuglab', 'default']
+    for idx, item in enumerate(SEED_PROMPTS):
+        ws = workspaces[idx % len(workspaces)]
         h = hashlib.sha256(item["prompt"].encode()).hexdigest()[:32]
         c.execute('''INSERT INTO cache_entries 
-            (prompt_hash, prompt_text, response_text, model, provider, tokens_in, tokens_out, created_at, hit_count)
-            VALUES (?,?,?,?,?,?,?,?,?)''',
-            (h, item["prompt"], item["response"], "claude-sonnet-4", "anthropic",
+            (workspace_id, prompt_hash, prompt_text, response_text, model, provider, tokens_in, tokens_out, created_at, hit_count)
+            VALUES (?,?,?,?,?,?,?,?,?,?)''',
+            (ws, h, item["prompt"], item["response"], "claude-sonnet-4", "anthropic",
              item["tokens_in"], item["tokens_out"], time.time(), item["hits"]))
-        # Record the initial hits as calls
         for _ in range(item["hits"]):
             c.execute('''INSERT INTO calls 
-                (prompt_hash, was_hit, tokens_in, tokens_out, latency_ms, created_at)
-                VALUES (?,1,?,?,0,?)''',
-                (h, item["tokens_in"], item["tokens_out"], time.time()))
+                (workspace_id, prompt_hash, was_hit, tokens_in, tokens_out, latency_ms, created_at)
+                VALUES (?,?,1,?,?,0,?)''',
+                (ws, h, item["tokens_in"], item["tokens_out"], time.time()))
     conn.commit()
     conn.close()
 
@@ -198,6 +202,7 @@ def cache_check():
     model = data.get("model", "claude-sonnet-4")
     provider = data.get("provider", "anthropic")
     threshold = data.get("threshold", 0.95)
+    ws = data.get("workspace", "default")
     
     if not prompt:
         return jsonify({"error": "prompt required"}), 400
@@ -207,13 +212,13 @@ def cache_check():
     c = conn.cursor()
     
     # Exact match first
-    c.execute("SELECT response_text, tokens_in, tokens_out, hit_count FROM cache_entries WHERE prompt_hash=?", (h,))
+    c.execute("SELECT response_text, tokens_in, tokens_out, hit_count FROM cache_entries WHERE workspace_id=? AND prompt_hash=?", (ws, h))
     row = c.fetchone()
     
     if row:
-        c.execute("UPDATE cache_entries SET hit_count = hit_count + 1 WHERE prompt_hash=?", (h,))
-        c.execute("INSERT INTO calls (prompt_hash, was_hit, tokens_in, tokens_out, latency_ms, created_at) VALUES (?,1,?,?,0,?)",
-                  (h, row[1], row[2], time.time()))
+        c.execute("UPDATE cache_entries SET hit_count = hit_count + 1 WHERE workspace_id=? AND prompt_hash=?", (ws, h))
+        c.execute("INSERT INTO calls (workspace_id, prompt_hash, was_hit, tokens_in, tokens_out, latency_ms, created_at) VALUES (?,?,1,?,?,0,?)",
+                  (ws, h, row[1], row[2], time.time()))
         conn.commit()
         conn.close()
         return jsonify({
@@ -228,7 +233,7 @@ def cache_check():
     # Semantic match (if embedding available)
     emb = get_embedding(prompt)
     if emb:
-        c.execute("SELECT prompt_hash, prompt_text, response_text, tokens_in, tokens_out, embedding, hit_count FROM cache_entries WHERE embedding IS NOT NULL")
+        c.execute("SELECT prompt_hash, prompt_text, response_text, tokens_in, tokens_out, embedding, hit_count FROM cache_entries WHERE workspace_id=? AND embedding IS NOT NULL", (ws,))
         best_sim = 0
         best_row = None
         for r in c.fetchall():
@@ -242,9 +247,9 @@ def cache_check():
                 continue
         
         if best_row:
-            c.execute("UPDATE cache_entries SET hit_count = hit_count + 1 WHERE prompt_hash=?", (best_row[0],))
-            c.execute("INSERT INTO calls (prompt_hash, was_hit, tokens_in, tokens_out, latency_ms, created_at) VALUES (?,1,?,?,0,?)",
-                      (best_row[0], best_row[3], best_row[4], time.time()))
+            c.execute("UPDATE cache_entries SET hit_count = hit_count + 1 WHERE workspace_id=? AND prompt_hash=?", (ws, best_row[0]))
+            c.execute("INSERT INTO calls (workspace_id, prompt_hash, was_hit, tokens_in, tokens_out, latency_ms, created_at) VALUES (?,?,1,?,?,0,?)",
+                      (ws, best_row[0], best_row[3], best_row[4], time.time()))
             conn.commit()
             conn.close()
             return jsonify({
@@ -268,6 +273,7 @@ def cache_store():
     provider = data.get("provider", "anthropic")
     tokens_in = data.get("tokens_in", 0)
     tokens_out = data.get("tokens_out", 0)
+    ws = data.get("workspace", "default")
     
     if not prompt or not response:
         return jsonify({"error": "prompt and response required"}), 400
@@ -279,11 +285,11 @@ def cache_store():
     conn = db_conn()
     c = conn.cursor()
     c.execute('''INSERT OR REPLACE INTO cache_entries 
-        (prompt_hash, prompt_text, response_text, model, provider, tokens_in, tokens_out, created_at, embedding)
-        VALUES (?,?,?,?,?,?,?,?,?)''',
-        (h, prompt, response, model, provider, tokens_in, tokens_out, time.time(), emb_blob))
-    c.execute("INSERT INTO calls (prompt_hash, was_hit, tokens_in, tokens_out, latency_ms, created_at) VALUES (?,0,?,?,0,?)",
-              (h, tokens_in, tokens_out, time.time()))
+        (workspace_id, prompt_hash, prompt_text, response_text, model, provider, tokens_in, tokens_out, created_at, embedding)
+        VALUES (?,?,?,?,?,?,?,?,?,?)''',
+        (ws, h, prompt, response, model, provider, tokens_in, tokens_out, time.time(), emb_blob))
+    c.execute("INSERT INTO calls (workspace_id, prompt_hash, was_hit, tokens_in, tokens_out, latency_ms, created_at) VALUES (?,?,0,?,?,0,?)",
+              (ws, h, tokens_in, tokens_out, time.time()))
     conn.commit()
     conn.close()
     
@@ -291,22 +297,23 @@ def cache_store():
 
 @app.route("/api/stats")
 def stats():
+    ws = request.args.get("workspace", "default")
     conn = db_conn()
     c = conn.cursor()
     
-    c.execute("SELECT COUNT(*) FROM cache_entries")
+    c.execute("SELECT COUNT(*) FROM cache_entries WHERE workspace_id=?", (ws,))
     total_cached = c.fetchone()[0]
     
-    c.execute("SELECT COUNT(*), SUM(tokens_in), SUM(tokens_out) FROM calls WHERE was_hit=1")
+    c.execute("SELECT COUNT(*), SUM(tokens_in), SUM(tokens_out) FROM calls WHERE workspace_id=? AND was_hit=1", (ws,))
     hits = c.fetchone()
     total_hits = hits[0] or 0
     tokens_saved = (hits[1] or 0) + (hits[2] or 0)
     
-    c.execute("SELECT COUNT(*), SUM(tokens_in), SUM(tokens_out) FROM calls WHERE was_hit=0")
+    c.execute("SELECT COUNT(*), SUM(tokens_in), SUM(tokens_out) FROM calls WHERE workspace_id=? AND was_hit=0", (ws,))
     misses = c.fetchone()
     total_misses = misses[0] or 0
     
-    c.execute("SELECT prompt_text, response_text, hit_count, tokens_in+tokens_out as ttl FROM cache_entries ORDER BY hit_count DESC LIMIT 10")
+    c.execute("SELECT prompt_text, response_text, hit_count, tokens_in+tokens_out as ttl FROM cache_entries WHERE workspace_id=? ORDER BY hit_count DESC LIMIT 10", (ws,))
     top = [{"prompt": r[0][:100]+"...", "response": r[1][:100]+"...", "hits": r[2], "tokens": r[3]} for r in c.fetchall()]
     
     conn.close()
@@ -315,6 +322,7 @@ def stats():
     hit_rate = (total_hits / total * 100) if total > 0 else 0
     
     return jsonify({
+        "workspace": ws,
         "total_cached": total_cached,
         "total_calls": total,
         "hits": total_hits,
@@ -327,12 +335,22 @@ def stats():
 
 @app.route("/api/calls")
 def calls():
+    ws = request.args.get("workspace", "default")
     conn = db_conn()
     c = conn.cursor()
-    c.execute("SELECT prompt_hash, was_hit, tokens_in, tokens_out, created_at FROM calls ORDER BY created_at DESC LIMIT 50")
+    c.execute("SELECT prompt_hash, was_hit, tokens_in, tokens_out, created_at FROM calls WHERE workspace_id=? ORDER BY created_at DESC LIMIT 50", (ws,))
     rows = [{"hash": r[0][:16], "hit": bool(r[1]), "tokens": r[2]+r[3], "time": datetime.fromtimestamp(r[4]).isoformat()} for r in c.fetchall()]
     conn.close()
     return jsonify(rows)
+
+@app.route("/api/workspaces")
+def workspaces():
+    conn = db_conn()
+    c = conn.cursor()
+    c.execute("SELECT DISTINCT workspace_id FROM cache_entries")
+    ws = [r[0] for r in c.fetchall()]
+    conn.close()
+    return jsonify({"workspaces": ws})
 
 def _count_entries():
     conn = db_conn()
