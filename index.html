@@ -60,6 +60,10 @@ footer a{color:var(--accent);text-decoration:none;}
 
 .error-banner{background:rgba(255,107,53,0.1);border:1px solid rgba(255,107,53,0.3);color:var(--accent);padding:1rem;border-radius:8px;margin:1rem 2rem;font-size:0.75rem;max-width:1400px;display:none;}
 
+.offline-badge{background:var(--glass);border:1px solid #222;border-radius:8px;padding:1.5rem;margin:1rem 2rem;max-width:1400px;text-align:center;}
+.offline-badge h4{color:var(--accent);font-size:0.8rem;margin-bottom:0.5rem;}
+.offline-badge p{color:var(--fog);font-size:0.7rem;}
+
 @media(max-width:768px){
   h1{font-size:1.5rem;}
   .grid{grid-template-columns:1fr;padding:1rem;}
@@ -76,12 +80,12 @@ footer a{color:var(--accent);text-decoration:none;}
 <header>
 <h1>Zeug <span>Prompt Cache</span> Atlas</h1>
 <div class="sub">A working demonstration of semantic prompt caching for AI agents. 
-Based on Nate B. Jones' token optimization framework — 15 rules compressed into a caching layer that saves 68% of tokens on repeated prompts.</div>
+Based on Nate B. Jones' token optimization framework — repeated prompts cached to save tokens and cost.</div>
 <div class="badge">Built by Lilith · Zeug Lab · 2026-07-31</div>
 <div class="live-indicator" style="margin-top:0.75rem;">LIVE DEMO — Loading...</div>
 </header>
 
-<div class="error-banner" id="error-banner">API connection failed. Demo data shown.</div>
+<div class="error-banner" id="error-banner">API connection failed. Showing cached demo data.</div>
 
 <div class="grid">
 <div class="card">
@@ -124,8 +128,6 @@ Based on Nate B. Jones' token optimization framework — 15 rules compressed int
 curl -X POST <span class="str" id="api-url-check">"https://api.example.com/cache/check"</span> \
 <br>  -H <span class="str">"Content-Type: application/json"</span> \
 <br>  -d <span class="str">'{"prompt":"What are the 15 rules to reduce AI token consumption?","model":"claude-sonnet-4","threshold":0.95}'</span>
-<br><br>
-<span class="cm"># Response: {"cached":true,"tokens_saved":1550,"hit_count":9}</span>
 </div>
 <br>
 <div class="code-block">
@@ -138,7 +140,6 @@ curl -X POST <span class="str" id="api-url-store">"https://api.example.com/cache
 <div class="code-block">
 <span class="cm"># Get stats</span><br>
 curl <span class="str" id="api-url-stats">"https://api.example.com/stats"</span>
-<br><span class="cm"># Returns: hit_rate, tokens_saved, cost_saved, top_cached</span>
 </div>
 </div>
 
@@ -150,12 +151,22 @@ Analysis by Lilith
 
 <script>
 // ═══════════════════════════════════════════════════════════════
-//  CONFIG — Update this when API URL changes
+//  API CONFIG — Auto-detect or fallback to demo data
 // ═══════════════════════════════════════════════════════════════
-const API_BASE = 'https://prompt-cache-api.onrender.com';
-// const API_BASE = 'http://localhost:8787'; // local dev
+// Priority: 1) ?api= query param  2) localStorage override  3) demo mode
+const API_BASE = (() => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('api')) return params.get('api').replace(/\/$/, '');
+  try {
+    const saved = localStorage.getItem('pca_api_base');
+    if (saved) return saved.replace(/\/$/, '');
+  } catch(e){}
+  return null; // null = demo mode
+})();
 
-const ENDPOINTS = {
+const DEMO_MODE = !API_BASE;
+
+const ENDPOINTS = DEMO_MODE ? null : {
   stats: `${API_BASE}/api/stats`,
   list: `${API_BASE}/api/cache/list`,
   check: `${API_BASE}/api/cache/check`,
@@ -163,9 +174,33 @@ const ENDPOINTS = {
 };
 
 // Update curl examples
-if(document.getElementById('api-url-check')) document.getElementById('api-url-check').textContent = `"${ENDPOINTS.check}"`;
-if(document.getElementById('api-url-store')) document.getElementById('api-url-store').textContent = `"${ENDPOINTS.store}"`;
-if(document.getElementById('api-url-stats')) document.getElementById('api-url-stats').textContent = `"${ENDPOINTS.stats}"`;
+if (!DEMO_MODE) {
+  document.getElementById('api-url-check').textContent = `"${ENDPOINTS.check}"`;
+  document.getElementById('api-url-store').textContent = `"${ENDPOINTS.store}"`;
+  document.getElementById('api-url-stats').textContent = `"${ENDPOINTS.stats}"`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DEMO DATA (shown when API is offline)
+// ═══════════════════════════════════════════════════════════════
+const DEMO_PROMPTS = [
+  {prompt:"What are the 15 rules to reduce AI token consumption?",hits:9,tokens:1550,response_preview:"Nate B. Jones identifies 3 levels: (1) Manual habits..."},
+  {prompt:"How does prompt caching reduce token costs?",hits:6,tokens:1000,response_preview:"Prompt caching stores repeated prompt prefixes..."},
+  {prompt:"What is the Ringer multi-agent framework?",hits:2,tokens:1180,response_preview:"Ringer is a local intermediary..."},
+  {prompt:"Explain the 'clean your desk' metaphor for token optimization",hits:2,tokens:970,response_preview:"The desk metaphor: Level 1 optimization..."},
+  {prompt:"How can SOPs be combined with prompt caching for asymmetric performance?",hits:1,tokens:1400,response_preview:"Insert Zeug SOPs as cached references..."},
+  {prompt:"What is ClawPanel's Prompt Caching API?",hits:1,tokens:1200,response_preview:"A workspace-level proxy that intercepts prompts..."}
+];
+
+const DEMO_STATS = {
+  total_cached: 6,
+  total_calls: 19,
+  hits: 13,
+  misses: 6,
+  hit_rate_percent: 68.4,
+  tokens_saved: 17400,
+  estimated_cost_saved_usd: 0.0522
+};
 
 // ═══════════════════════════════════════════════════════════════
 //  STATE
@@ -176,94 +211,67 @@ let graphData = {nodes:[], links:[]};
 //  FETCH DATA
 // ═══════════════════════════════════════════════════════════════
 async function loadStats() {
+  if (DEMO_MODE) {
+    renderStats(DEMO_STATS);
+    buildGraph(DEMO_STATS);
+    document.querySelector('.live-indicator').innerHTML = 'DEMO MODE — <a href="?api=" style="color:var(--accent2)">Connect API</a>';
+    return;
+  }
+
   try {
     const r = await fetch(ENDPOINTS.stats, {mode:'cors'});
     if(!r.ok) throw new Error('Stats API failed');
     const d = await r.json();
-    
-    document.getElementById('stat-cached').textContent = d.total_cached;
-    document.getElementById('stat-cached').classList.remove('loading');
-    
-    document.getElementById('stat-rate').textContent = d.hit_rate_percent + '%';
-    document.getElementById('stat-rate').classList.remove('loading');
-    
-    document.getElementById('stat-saved').textContent = (d.tokens_saved / 1000).toFixed(1) + 'K';
-    document.getElementById('stat-saved').classList.remove('loading');
-    document.getElementById('stat-usd').textContent = '$' + d.estimated_cost_saved_usd + ' saved';
-    document.getElementById('stat-scale').textContent = 'At scale: $142K/year (100 workspaces)';
-    
-    document.getElementById('stat-calls').textContent = d.total_calls;
-    document.getElementById('stat-calls').classList.remove('loading');
-    document.getElementById('stat-breakdown').textContent = `${d.hits} hits · ${d.misses} misses`;
-    
+    renderStats(d);
+    buildGraph(d);
     document.querySelector('.live-indicator').innerHTML = 
       `LIVE — ${d.total_cached} cached · ${d.hits} hits · ${d.tokens_saved.toLocaleString()} tokens saved`;
-    
-    // Build graph from top cached
-    graphData.nodes = d.top_cached.map((t,i) => ({
-      id: i,
-      name: t.prompt.slice(0,35) + (t.prompt.length>35?'...':''),
-      hits: t.hits,
-      tokens: t.tokens,
-      r: 10 + t.hits * 3
-    }));
-    graphData.links = [];
-    for(let i=0;i<graphData.nodes.length;i++){
-      for(let j=i+1;j<graphData.nodes.length;j++){
-        const sim = 1 - Math.abs(graphData.nodes[i].hits - graphData.nodes[j].hits)/10;
-        if(sim > 0.3) graphData.links.push({source:i, target:j, value: sim*5});
-      }
-    }
-    drawGraph();
-    
   } catch(e) {
     console.error('Stats error:', e);
     showError();
+    renderStats(DEMO_STATS);
+    buildGraph(DEMO_STATS);
   }
 }
 
+function renderStats(d) {
+  document.getElementById('stat-cached').textContent = d.total_cached;
+  document.getElementById('stat-cached').classList.remove('loading');
+  
+  document.getElementById('stat-rate').textContent = d.hit_rate_percent + '%';
+  document.getElementById('stat-rate').classList.remove('loading');
+  
+  document.getElementById('stat-saved').textContent = (d.tokens_saved / 1000).toFixed(1) + 'K';
+  document.getElementById('stat-saved').classList.remove('loading');
+  document.getElementById('stat-usd').textContent = '$' + d.estimated_cost_saved_usd + ' saved';
+  
+  document.getElementById('stat-calls').textContent = d.total_calls;
+  document.getElementById('stat-calls').classList.remove('loading');
+  document.getElementById('stat-breakdown').textContent = `${d.hits} hits · ${d.misses} misses`;
+}
+
 async function loadPrompts() {
+  if (DEMO_MODE) {
+    renderPrompts(DEMO_PROMPTS);
+    return;
+  }
+
   try {
     const r = await fetch(ENDPOINTS.list, {mode:'cors'});
     if(!r.ok) throw new Error('List API failed');
     const prompts = await r.json();
-    
-    const list = document.getElementById('prompts-list');
-    if(prompts.length === 0){
-      list.innerHTML = '<div class="prompt-card"><div class="prompt-text">No cached prompts yet.</div></div>';
-      return;
-    }
-    
-    list.innerHTML = prompts.map(p => `
-      <div class="prompt-card">
-        <div class="prompt-text">${escapeHtml(p.prompt)}</div>
-        <div class="prompt-meta">
-          <span class="hits-badge">${p.hits} hit${p.hits>1?'s':''}</span>
-          <div class="tokens-badge">${p.tokens.toLocaleString()} tokens</div>
-        </div>
-      </div>
-    `).join('');
-    
+    renderPrompts(prompts.length ? prompts : DEMO_PROMPTS);
   } catch(e) {
     console.error('Prompts error:', e);
-    // Fallback to static demo data
-    renderFallbackPrompts();
+    renderPrompts(DEMO_PROMPTS);
   }
 }
 
-function renderFallbackPrompts() {
-  const prompts = [
-    {text:"What are the 15 rules to reduce AI token consumption?",hits:9,tokens:1550},
-    {text:"How does prompt caching reduce token costs?",hits:6,tokens:1000},
-    {text:"What is the Ringer multi-agent framework?",hits:2,tokens:1180},
-    {text:"Explain the 'clean your desk' metaphor for token optimization",hits:2,tokens:970},
-    {text:"How can SOPs be combined with prompt caching for asymmetric performance?",hits:1,tokens:1400},
-    {text:"What is ClawPanel's Prompt Caching API?",hits:1,tokens:1200}
-  ];
+function renderPrompts(prompts) {
   const list = document.getElementById('prompts-list');
   list.innerHTML = prompts.map(p => `
     <div class="prompt-card">
-      <div class="prompt-text">${escapeHtml(p.text)}</div>
+      <div class="prompt-text">${escapeHtml(p.prompt)}</div>
       <div class="prompt-meta">
         <span class="hits-badge">${p.hits} hit${p.hits>1?'s':''}</span>
         <div class="tokens-badge">${p.tokens.toLocaleString()} tokens</div>
@@ -274,7 +282,7 @@ function renderFallbackPrompts() {
 
 function showError() {
   document.getElementById('error-banner').style.display = 'block';
-  document.querySelector('.live-indicator').innerHTML = 'OFFLINE — Showing cached data';
+  document.querySelector('.live-indicator').innerHTML = 'OFFLINE — Showing demo data';
   document.querySelector('.live-indicator').style.color = 'var(--accent)';
 }
 
@@ -287,6 +295,31 @@ function escapeHtml(text) {
 // ═══════════════════════════════════════════════════════════════
 //  D3 GRAPH
 // ═══════════════════════════════════════════════════════════════
+function buildGraph(statsData) {
+  const top = statsData.top_cached || DEMO_PROMPTS.map((p,i) => ({
+    prompt: p.prompt.slice(0,100)+'...',
+    hits: p.hits,
+    tokens: p.tokens
+  }));
+
+  graphData.nodes = top.map((t,i) => ({
+    id: i,
+    name: (t.prompt || t.text || '').slice(0,35) + '...',
+    hits: t.hits,
+    tokens: t.tokens,
+    r: 10 + t.hits * 3
+  }));
+  
+  graphData.links = [];
+  for(let i=0;i<graphData.nodes.length;i++){
+    for(let j=i+1;j<graphData.nodes.length;j++){
+      const sim = 1 - Math.abs(graphData.nodes[i].hits - graphData.nodes[j].hits)/10;
+      if(sim > 0.3) graphData.links.push({source:i, target:j, value: sim*5});
+    }
+  }
+  drawGraph();
+}
+
 function drawGraph() {
   const container = document.getElementById('graph');
   const w = container.clientWidth;
@@ -299,7 +332,6 @@ function drawGraph() {
     .attr('height', h)
     .attr('viewBox', `0 0 ${w} ${h}`);
   
-  // Glow gradient
   const defs = svg.append('defs');
   const grad = defs.append('radialGradient')
     .attr('id','node-glow').attr('cx','50%').attr('cy','50%').attr('r','50%');
@@ -345,14 +377,8 @@ function drawGraph() {
 // ═══════════════════════════════════════════════════════════════
 loadStats();
 loadPrompts();
-
-// Refresh every 10s
 setInterval(()=>{ loadStats(); loadPrompts(); }, 10000);
-
-// Handle resize
-window.addEventListener('resize', ()=>{
-  if(graphData.nodes.length > 0) drawGraph();
-});
+window.addEventListener('resize', ()=>{ if(graphData.nodes.length > 0) drawGraph(); });
 </script>
 </body>
 </html>
